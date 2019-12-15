@@ -3,7 +3,7 @@ from ..commons import EPSolver, EPAlgo, EPImplementation
 from ..commons import MvKernelizer
 from ..utils import TensorUser, pre_tensorize
 from ..utils.typing import *
-from abc import ABC, abstractmethod
+import itertools
 import torch
 
 # ------------------------------------
@@ -19,7 +19,7 @@ class AbstractMvSLAlgo(BaseAlgo, TensorUser):
         TensorUser.__init__(self, reg=reg)
 
     def _prepare_(self,
-                  Xs: Tensor,
+                  Xs: Sequence[Tensor],
                   y: Tensor,
                   y_unique: Optional[Tensor] = None):
         # if self.is_prepared and not self.__should_reprepare:
@@ -29,11 +29,24 @@ class AbstractMvSLAlgo(BaseAlgo, TensorUser):
         self._y_unique = torch.unique(self._y) if y_unique is None else y_unique
         self.ecs = torch.stack([torch.tensor([1 if _ == clazz else 0 for _ in self._y], dtype=torch.float)
                                 for clazz in self._y_unique])
-        self.n_views = self._Xs.shape[0]
+        self.n_views = len(self._Xs)
         self.n_classes = len(self._y_unique)
         self.n_samples = self._y.shape[0]
         self.ori_dims = [X.shape[1] for X in self._Xs]
         self.dims = [X.shape[1] for X in self._Xs]
+
+    def _construct_mv_matrix(self,
+                             constructor: Callable = lambda self, j, r: torch.zeros(self.dims[j], self.dims[r])
+                             ) -> Tensor:
+        S = torch.zeros(sum(self.dims), sum(self.dims))
+        for j, r in list(itertools.combinations(list(range(self.n_views)), r=2)) + [(_, _) for _ in range(self.n_views)]:
+            idx_j = slice(sum(self.dims[:j]), sum(self.dims[:j+1]))
+            idx_r = slice(sum(self.dims[:r]), sum(self.dims[:r+1]))
+            tmp = constructor(self, j, r)
+            S[idx_j, idx_r] = tmp
+            if j != r:
+                S[idx_r, idx_j] = tmp.t()
+        return S
 
 
 class EOBasedMvSLAlgo(AbstractMvSLAlgo, metaclass=MetaEOBasedAlgo):
@@ -115,7 +128,7 @@ class EOBasedMvSLAlgo(AbstractMvSLAlgo, metaclass=MetaEOBasedAlgo):
     def predicates(self) -> Dict:
         predicates = {'maximize': [], 'minimize': []}
         for val in vars(self).values():
-            if isinstance(val, BaseMvSLObjective):
+            if isinstance(val, EOBaseMvSLObjective):
                 if val.predicate.lower().startswith('max'):
                     predicates['maximize'].append(str(val))
                 elif val.predicate.lower().startswith('min'):
@@ -146,9 +159,10 @@ class EOBasedMvSLAlgo(AbstractMvSLAlgo, metaclass=MetaEOBasedAlgo):
 
 class GradientBasedMvSLAlgo(AbstractMvSLAlgo, torch.nn.Module, metaclass=MetaGradientBasedAlgo):
 
-    def __init__(self, reg='auto'):
+    def __init__(self, projector, reg='auto'):
         AbstractMvSLAlgo.__init__(self, reg=reg)
         torch.nn.Module.__init__(self)
+        self.projector = projector
 
     def forward(self,
                 Xs: Tensor,
@@ -157,7 +171,7 @@ class GradientBasedMvSLAlgo(AbstractMvSLAlgo, torch.nn.Module, metaclass=MetaGra
         pass
 
     def transform(self, Xs: Tensor) -> Tensor:
-        pass
+        return self.projector(Xs)
 
     def _prepare_(self,
                   Xs: Tensor,
@@ -170,7 +184,7 @@ class GradientBasedMvSLAlgo(AbstractMvSLAlgo, torch.nn.Module, metaclass=MetaGra
 # ------------------------------------
 # Template for Objectives
 # ------------------------------------
-class BaseMvSLObjective(AbstractMvSLAlgo):
+class EOBaseMvSLObjective(AbstractMvSLAlgo):
 
     def __init__(self,
                  predicate: String = 'maximize',
@@ -191,12 +205,12 @@ class BaseMvSLObjective(AbstractMvSLAlgo):
     def fit(self,
             Xs: Union[Tensor, Iterable[Tensor]],
             y: Union[Tensor, NumpyArray, Iterable],
-            y_unique: Optional[Union[Tensor, NumpyArray, Iterable]] = None) -> 'BaseMvSLObjective':
+            y_unique: Optional[Union[Tensor, NumpyArray, Iterable]] = None) -> 'EOBaseMvSLObjective':
         self._prepare_(Xs, y, y_unique)
         self._fit_()
         return self
 
-    def fit_like(self, other: 'BaseAlgo') -> 'BaseMvSLObjective':
+    def fit_like(self, other: 'BaseAlgo') -> 'EOBaseMvSLObjective':
         assert other.is_fit, '{} is not fitted yet!'.format(other)
         self._prepare_from_(other)
         self._fit_()
@@ -229,3 +243,25 @@ class BaseMvSLObjective(AbstractMvSLAlgo):
 
     def __call__(self, *args, **kwargs):
         return self.O
+
+
+class GradientBasedMvSLObjective(AbstractMvSLAlgo, torch.nn.Module, metaclass=MetaGradientBasedAlgo):
+
+    def __init__(self, projector,
+                 reg: Union[Number, String] = 'auto'):
+        AbstractMvSLAlgo.__init__(self, reg=reg)
+        torch.nn.Module.__init__(self)
+        self.projector = projector
+
+    def forward(self,
+                Xs: Tensor,
+                y: Tensor,
+                y_unique: Optional[Tensor] = None) -> Tensor:
+        pass
+
+    def _prepare_(self,
+                  Xs: Tensor,
+                  y: Tensor,
+                  y_unique: Optional[Tensor] = None):
+        super()._prepare_(Xs, y, y_unique)
+        self._post_prepare_()

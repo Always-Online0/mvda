@@ -1,6 +1,5 @@
-from .bases import BaseSLObjective, GradientBasedSLObjective
+from .bases import EOBasedSLObjective, GradientBasedSLObjective
 from ..commons import affinity
-from ..grad.constraints import stiefel_constraint
 import torch
 import itertools
 
@@ -8,7 +7,7 @@ import itertools
 # ------------------------------------
 # LDA
 # ------------------------------------
-class LDAIntraScatter(BaseSLObjective):
+class LDAIntraScatter(EOBasedSLObjective):
 
     def __init__(self):
         super(LDAIntraScatter, self).__init__(predicate='minimize')
@@ -21,7 +20,7 @@ class LDAIntraScatter(BaseSLObjective):
         return self._X.t() @ (I - W) @ self._X
 
 
-class LDAInterScatter(BaseSLObjective):
+class LDAInterScatter(EOBasedSLObjective):
 
     def __init__(self):
         super(LDAInterScatter, self).__init__(predicate='maximize')
@@ -46,6 +45,7 @@ class pcLDAObjective(GradientBasedSLObjective):
         self.beta = beta
 
     def forward(self, X, y, y_unique=None):
+        projected_X = self.projector(self._X)
         cls_W = torch.zeros(self.n_classes, self.n_samples, self.n_samples)
         cls_I = torch.zeros(self.n_classes, self.n_samples, self.n_samples)
         cls_n_samples = [self.ecs[ci].sum() for ci in self._y_unique]
@@ -54,22 +54,55 @@ class pcLDAObjective(GradientBasedSLObjective):
             cls_I[ci] = torch.eye(self.n_samples) * self.ecs[ci]
         W = cls_W.sum(dim=0)
         I = torch.eye(self.n_samples)
-        cls_Sw = [self._X.t() @ (cls_I[ci] - cls_W[ci]) @ self._X for ci in self._y_unique]
-        Sw = self._X.t() @ (I - W) @ self._X
+        cls_Sw = [projected_X.t() @ (cls_I[ci] - cls_W[ci]) @ projected_X for ci in self._y_unique]
+        Sw = projected_X.t() @ (I - W) @ projected_X
 
         pcs = sorted(list(itertools.combinations(self._y_unique, r=2)))
         pc_Sw = [self.beta * (cls_n_samples[a] * cls_Sw[a] + cls_n_samples[b] * cls_Sw[b]) / (cls_n_samples[a] + cls_n_samples[b]) + (1 - self.beta) * Sw
                  for a, b in pcs]
-        pc_du = [self._X.t() @ self.ecs[a].unsqueeze(0).t() / cls_n_samples[a] - self._X.t() @ self.ecs[b].unsqueeze(0).t() / cls_n_samples[b]
+        pc_du = [projected_X.t() @ self.ecs[a].unsqueeze(0).t() / cls_n_samples[a]
+                 - projected_X.t() @ self.ecs[b].unsqueeze(0).t() / cls_n_samples[b]
                  for a, b in pcs]
-        G = stiefel_constraint(self.projector.w)
-        return sum([cls_n_samples[a] * cls_n_samples[b] * (pc_du[i].t() @ G @ self._regularize(G.t() @ pc_Sw[i] @ G).inverse() @ G.t() @ pc_du[i]) ** -self.q for i, (a, b) in enumerate(pcs)])
+        # return sum([cls_n_samples[a] * cls_n_samples[b] * (pc_du[i].t() @ self._regularize(G.t() @ pc_Sw[i] @ G).inverse() @ pc_du[i]) ** -self.q for i, (a, b) in enumerate(pcs)])
+        return sum([cls_n_samples[a] * cls_n_samples[b] * (torch.trace(pc_du[i] @ pc_du[i].t()) / torch.trace(pc_Sw[i])) ** -self.q for i, (a, b) in enumerate(pcs)])
+
+
+class CenterLDAObjective(GradientBasedSLObjective):
+
+    def __init__(self, projector, q=1, beta=1):
+        super(CenterLDAObjective, self).__init__(projector=projector)
+        self.centers = torch.nn.Parameter(
+            torch.eye(3, 2) * 100, requires_grad=True
+        )
+        self.initialized = False
+        __import__('warnings').warn('Experimental', UserWarning)
+
+    def forward(self, X, y, y_unique=None):
+        # W = torch.zeros(self.projector.out_dim, self.projector.out_dim)
+        # for ci in self._y_unique:
+        #     W += torch.sum(self.ecs[ci]) * (self.centers[ci].unsqueeze(0).t() @ self.centers[ci].unsqueeze(0))
+        # I = torch.eye(self.n_samples)
+        # B = self.n_samples * (self.centers.mean(dim=0).unsqueeze(0).t() @ self.centers.mean(dim=0).unsqueeze(0))
+        # Sw = self.projector.w.t() @ self._X.t() @ I @ self._X @ self.projector.w - W
+        # Sb = W - B
+        projected_X = self.projector(self._X)
+        global_center = projected_X.mean(dim=0)
+        # if not self.initialized:
+        #     with torch.no_grad():
+        #         us = torch.stack([torch.mean(self.ecs[ci].unsqueeze(0) @ projected_X, dim=0) for ci in self._y_unique])
+        #         self.centers.data.copy_(us)
+        #     self.initialized = True
+
+        Sw = sum([sum([(x - self.centers[ci]).unsqueeze(0).t() @ (x - self.centers[ci]).unsqueeze(0) for x in projected_X[torch.where(self.ecs[ci] == 1)]]) for ci in self._y_unique])
+        Sb = sum([torch.sum(self.ecs[ci]) * (self.centers[ci] - global_center).unsqueeze(0).t() @ (self.centers[ci] - global_center).unsqueeze(0) for ci in self._y_unique])
+        return Sw.trace() / Sb.trace()
+        return sum([torch.dist(self.ecs[ci].unsqueeze(0) @ self._X @ G / torch.sum(self.ecs[ci]), self.centers[ci]) for ci in self._y_unique])
 
 
 # ------------------------------------
 # LFDA
 # ------------------------------------
-class LFDAIntraScatter(BaseSLObjective):
+class LFDAIntraScatter(EOBasedSLObjective):
 
     def __init__(self,
                  affinity_type='kernel',
@@ -100,7 +133,7 @@ class LFDAIntraScatter(BaseSLObjective):
         return W * affinity(self._X, **self.affinity_params)
 
 
-class LFDAInterScatter(BaseSLObjective):
+class LFDAInterScatter(EOBasedSLObjective):
 
     def __init__(self,
                  affinity_type='kernel',
@@ -134,7 +167,7 @@ class LFDAInterScatter(BaseSLObjective):
 # ------------------------------------
 # LFDA with Locally Linear Embedding
 # ------------------------------------
-class LFDALLEIntraScatter(BaseSLObjective):
+class LFDALLEIntraScatter(EOBasedSLObjective):
 
     def __init__(self,
                  affinity_type='lle',
@@ -164,7 +197,7 @@ class LFDALLEIntraScatter(BaseSLObjective):
         return (1.0 - self.lambda_lc) * W + self.lambda_lc * affinity(self._X, **self.affinity_params)
 
 
-class LFDALLEInterScatter(BaseSLObjective):
+class LFDALLEInterScatter(EOBasedSLObjective):
 
     def __init__(self,
                  affinity_type='lle',

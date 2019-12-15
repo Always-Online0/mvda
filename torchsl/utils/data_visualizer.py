@@ -17,6 +17,7 @@ class DataVisualizer:
     markers = ['o', '^', 's', '*', 'p', 'P', 'v', 'X', 'D', 'H', "2", '$...$']
 
     figure_params = {'figsize': (4, 4)}
+    plot_params = {'linestyle': '--', 'marker': 'o'}
     scatter_params = {'linewidth': 0.1, 'alpha': 0.5}
     legend_params = {'fancybox': True, 'prop': {'size': 8}}
 
@@ -59,6 +60,15 @@ class DataVisualizer:
         fig, ax = plt.subplots()
         ax.plot(transformed, pdfs, 'go--', lw=1, alpha=0.8, label='PDF')
         plt.show()
+
+    def plot(self, *args, title=None, **kwargs):
+        kwargs.update(self.plot_params)
+        ax = self.__init_axe()
+        ax.plot(*args, **kwargs)
+
+        if title is not None:
+            ax.set_title(title)
+        self.axes.append(ax)
 
     @pre_vectorize(positionals=(1, 2))
     def scatter(self,

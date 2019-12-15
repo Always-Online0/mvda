@@ -1,5 +1,6 @@
 from .utils.typing import *
 from .utils.tensorutils import pre_tensorize
+import torch
 
 
 # ------------------------------------
@@ -125,3 +126,15 @@ class MetaGradientBasedAlgo(type):
             if func in attr:
                 pretensorized_func = pre_tensorize(positionals=1, dtype=torch.float)(attr[func])
                 setattr(cls, func, pretensorized_func)
+
+
+# ------------------------------------
+# Metas
+# ------------------------------------
+class Projector(torch.nn.Module):
+
+    def forward(self, mat: Tensor) -> Tensor:
+        return mat
+
+    def transform(self, mat: Tensor) -> Tensor:
+        return self(mat)

@@ -109,7 +109,7 @@ class EOBasedSLAlgo(AbstractSLAlgo, metaclass=MetaEOBasedAlgo):
     def predicates(self) -> Dict:
         predicates = {'maximize': [], 'minimize': []}
         for val in vars(self).values():
-            if isinstance(val, BaseSLObjective):
+            if isinstance(val, EOBasedSLObjective):
                 if val.predicate.lower().startswith('max'):
                     predicates['maximize'].append(str(val))
                 elif val.predicate.lower().startswith('min'):
@@ -161,7 +161,7 @@ class GradientBasedSLAlgo(AbstractSLAlgo, torch.nn.Module, metaclass=MetaGradien
 # ------------------------------------
 # Template for Objectives
 # ------------------------------------
-class BaseSLObjective(AbstractSLAlgo, metaclass=MetaEOBasedAlgo):
+class EOBasedSLObjective(AbstractSLAlgo, metaclass=MetaEOBasedAlgo):
 
     def __init__(self,
                  predicate: String = 'maximize',
@@ -180,13 +180,13 @@ class BaseSLObjective(AbstractSLAlgo, metaclass=MetaEOBasedAlgo):
     def fit(self,
             X: Tensor,
             y: Union[Tensor, NumpyArray, Iterable],
-            y_unique: Optional[Union[Tensor, NumpyArray, Iterable]] = None) -> 'BaseSLObjective':
+            y_unique: Optional[Union[Tensor, NumpyArray, Iterable]] = None) -> 'EOBasedSLObjective':
         if not hasattr(self, '_X') or (self._X != X and self._y != y):
             self._prepare_(X, y, y_unique)
             self._fit_()
         return self
 
-    def fit_like(self, other: 'BaseAlgo') -> 'BaseSLObjective':
+    def fit_like(self, other: 'BaseAlgo') -> 'EOBasedSLObjective':
         assert other.is_fit, '{} is not fitted yet!'.format(other)
         self._prepare_from_(other)
         self._fit_()

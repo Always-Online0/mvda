@@ -1,18 +1,15 @@
 from .bases import GradientBasedSLAlgo
-from .objectives import pcLDAObjective
-from .projector import LinearProjector
+from .objectives import pcLDAObjective, CenterLDAObjective
 from ..utils.typing import *
-from ..grad.constraints import StiefelManifoldConstraint
 import torch.nn as nn
 import torch
 
 
 class pcLDA(GradientBasedSLAlgo):
 
-    def __init__(self, projector=LinearProjector(3, 2), q=1, beta=1):
+    def __init__(self, projector, q=1, beta=1):
         super(pcLDA, self).__init__(projector=projector)
         self.criterion = pcLDAObjective(projector=self.projector, q=q, beta=beta)
-        self.constraint = StiefelManifoldConstraint.apply
 
     def forward(self,
                 X: Tensor,
